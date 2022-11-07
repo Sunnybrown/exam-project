@@ -1,0 +1,276 @@
+---
+- name: Deploying a laravel application by Sunday
+  hosts: all
+  become: true
+  become_method: sudo
+  vars:
+    db_user: examproject
+    db_pass: examproject
+    db_name: examproject
+
+  tasks:
+    - name: timezone chancge
+      timezone:
+          name: Africa/Lagos
+
+    - name: install net-tools
+      apt:
+          name: net-tools
+          state: present
+
+    - name: Update & upgrade apt packages
+      become: true
+      apt:
+        update_cache: yes
+        upgrade: 'yes'
+
+    - name: Install required dependencies
+      package: 
+        name: "{{ item }}"
+        state: present
+        update_cache: yes
+      with_items:
+        - curl
+        - wget
+        - unzip
+        - git 
+        - apache2
+
+    - name: Install ca certificates
+      shell: apt -y install lsb-release apt-transport-https ca-certificates
+
+    - name: add ondrej php ppa
+      apt_repository:
+        repo="ppa:ondrej/php"
+     
+    - name: update and upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: 'yes'
+
+    - name: Install php8.1 and the needed extensions
+      apt:
+         name: "{{ item }}"
+         state: present
+         update_cache: yes
+      with_items: 
+         - php8.1 
+         - libapache2-mod-php
+         - php8.1-mysql
+         - php8.1-common
+         - php8.1-mysql
+         - php8.1-xml
+         - php8.1-xmlrpc
+         - php8.1-curl
+         - php8.1-gd
+         - php8.1-imagick
+         - php8.1-cli
+         - php8.1-dev
+         - php8.1-imap
+         - php8.1-mbstring
+         - php8.1-opcache
+         - php8.1-soap
+         - php8.1-zip
+         - php8.1-intl
+
+    - name: update & upgrade apt packages
+      apt:
+        update_cache: yes
+        upgrade: 'yes'
+
+    - name: Get mysql .deb url
+      get_url: 
+        url="https://dev.mysql.com/get/mysql-apt-config_0.8.22-1_all.deb"
+        dest="$HOME/mysql-apt-config_0.8.22-1_all"
+    
+    - name: mysql .deb package
+      apt: deb="$HOME/mysql-apt-config_0.8.22-1_all.deb"
+
+    - name: install pip3
+      apt:
+        name: python3-pip 
+        state: present
+
+    - name: Install pymysql python package
+      ansible.builtin.pip:
+        name: pymysql
+
+    - name: Install mysql-server
+      apt:
+        name: mysql-server
+        state: present
+        update_cache: yes
+
+    - name: start & enable mysql
+      service:
+        name: mysql
+        state: started
+        enabled: yes
+
+    - name: create mysql user examproject
+      mysql_user:
+        name: "{{db_user}}"
+        password: "{{db_pass}}"
+        priv: '*.*:ALL'
+        host: 'localhost'
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+
+    - name: create laravel
+      mysql_db:
+        name: "{{db_name}}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+   
+    - name: Enable remote login to mysql
+      lineinfile:
+        path: /etc/mysql/mysql.conf.d/mysqld.cnf
+        regexp: '^bind-address'
+        line: 'bind-address = 0.0.0.0'
+        backup: yes
+    
+    - name: Restart mysql
+      service:
+        name: mysql
+        state: restarted
+    
+    - name: Copy PostgreSQL script to remote
+      copy:
+        src: ~/ansible/files/postgresql.sh
+        dest: ~/postgresql.sh
+        owner: brown
+        group: brown
+        mode: 0777
+      
+    - name: Execute PostgreSQL script on remote
+      shell: bash ~/postgresql.sh
+      ignore_errors: true
+
+    - name: Copy the App to remote
+      become: false
+      become_user: brown
+      ansible.builtin.copy:
+        src: ~/ansible/files/laravel
+        dest: ~/sunday-exam-project
+        owner: brown
+        group: brown
+        mode: '0777'
+            
+    - name: Copy .env file to remote
+      become: true
+      copy:
+        src: ~/ansible/files/.env
+        dest: ~/sunday-exam-project/laravel/.env
+        owner: brown
+        group: brown
+        mode: 0775
+        remote_src: no
+
+    - name: create user group
+      group: 
+        name: www-data
+        state: present
+ 
+    - name: creat user
+      user: 
+        name: www-data
+        state: present
+
+    - ansible.builtin.user:
+        name: www-data
+        shell: /bin/bash
+        groups: www-data
+        append: yes
+
+    - name: Download & install Composer
+      shell: curl -sS https://getcomposer.org/installer | php
+      args:
+        chdir: /usr/src/
+        creates: /usr/local/bin/composer
+        warn: false
+      become: yes
+
+    - name: Adding Composer to global path
+      copy: 
+        remote_src: yes
+        src: /usr/src/composer.phar      
+        dest: /usr/local/bin/composer
+        group: root
+        mode: '0777'
+        owner: root
+      become: yes
+
+    - name: "installing composer"
+      become: false
+      composer:
+        command: install
+        global_command: false
+        working_dir: ~/sunday-exam-project/laravel
+    
+    - name: Composer create project
+      become: false
+      composer:
+        command: create-project
+        global_command: false
+        working_dir: ~/sunday-exam-project/laravel
+
+- name: Artisan
+  hosts: all
+  vars:
+    db_user: examproject
+    db_pass: examproject
+    db_name: examproject
+
+  tasks:
+    - name: Artisan Key-Gen
+      shell: cd ~/sunday-exam-project/laravel && php artisan key:generate && cd
+
+    - name: Artisan config clear cache
+      shell: cd ~/sunday-exam-project/laravel && php artisan config:cache && cd
+ 
+    - name: Artisan migrate fresh
+      shell: cd ~/sunday-exam-project/laravel && php artisan migrate:fresh && cd
+
+    - name: Refresh Artisan migrate
+      shell: cd ~/sunday-exam-project/laravel && php artisan migrate:refresh && cd
+    - name: Chang Directory Permissions
+      shell: sudo chmod -R 775 ~/sunday-exam-project/laravel
+
+- name: Deploy laravel app
+  hosts: all
+  become: true
+  become_method: sudo
+  vars:
+    db_user: examproject
+    db_pass: examproject
+    db_name: examproject
+
+  tasks:
+
+    - name: Chang Directory Owner
+      shell: sudo chown -R www-data:www-data ~/sunday-exam-project
+
+    - name: Move the app to /var/www
+      shell: sudo mv ~/sunday-exam-project /var/www/
+
+    - name: create apache virtualhost for domain
+      copy: 
+        src: ~/ansible/files/sunday-exam-project.conf
+        dest: /etc/apache2/sites-available/sunday-exam-project.conf
+
+    - name: permission for laravel conf file
+      shell: sudo chmod -R 777 /etc/apache2/sites-available/sunday-exam-project.conf
+
+    - name: Remove default apache site
+      command: sudo a2dissite 000-default.conf
+
+    - name: Update a2ensite
+      command: sudo a2ensite sunday-exam-project.conf
+      
+    - name: Turn on Apache rewrite module
+      command:  sudo a2enmod rewrite
+
+    - name: Restart Apache2
+      service:
+        name: apache2
+        state: restarted
